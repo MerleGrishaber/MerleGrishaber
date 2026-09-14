@@ -1,0 +1,86 @@
+name: CI Pipeline
+
+on:
+  - push
+  - pull_request
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version:
+          - stable
+          - oldstable
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          check-latest: true
+          cache: true
+
+      - name: Install dependencies
+        if: hashFiles('go.mod') != ''
+        run: go mod download
+
+      - name: Check formatting
+        if: hashFiles('go.mod') != ''
+        run: test -z "$(gofmt -l .)"
+
+      - name: Run lint checks
+        if: hashFiles('go.mod') != ''
+        run: go vet ./...
+
+      - name: Build package
+        if: hashFiles('go.mod') != ''
+        run: go build ./...
+
+      - name: Run tests
+        if: hashFiles('go.mod') != ''
+        run: go test ./...
+
+      - name: Write pipeline summary
+        if: always()
+        shell: bash
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          SETUP_GO_OUTCOME: ${{ steps.setup-go.outcome }}
+          DEPS_OUTCOME: ${{ steps.deps.outcome }}
+          FORMAT_OUTCOME: ${{ steps.format.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+        run: |
+          status() {
+            case "${1:-missing}" in
+              success) echo success ;;
+              failure) echo failure ;;
+              cancelled) echo cancelled ;;
+              *) echo skipped ;;
+            esac
+          }
+
+          {
+            echo "| Step | Outcome |"
+            echo "| --- | --- |"
+            echo "| Checkout | $(status "$CHECKOUT_OUTCOME") |"
+            echo "| Go setup | $(status "$SETUP_GO_OUTCOME") |"
+            echo "| Dependencies | $(status "$DEPS_OUTCOME") |"
+            echo "| Formatting | $(status "$FORMAT_OUTCOME") |"
+            echo "| Lint | $(status "$LINT_OUTCOME") |"
+            echo "| Build | $(status "$BUILD_OUTCOME") |"
+            echo "| Tests | $(status "$TEST_OUTCOME") |"
+          } >> "$GITHUB_STEP_SUMMARY"
